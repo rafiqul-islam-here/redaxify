@@ -1,0 +1,232 @@
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: redaxify_db_dev
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-redaxify_dev}
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - redaxify_dev_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-redaxify_dev}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 512M
+
+  # Local Azure Blob Storage emulator - replaces the real Azure Storage account.
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite:latest
+    container_name: redaxify_azurite
+    restart: unless-stopped
+    command: "azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --location /data"
+    volumes:
+      - azurite_data:/data
+    ports:
+      - "10000:10000" # blob
+      - "10001:10001" # queue
+      - "10002:10002" # table
+    networks:
+      - redaxify_dev_network
+
+  # Local SMTP catcher - replaces real Gmail SMTP. Web UI: http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: redaxify_mailpit
+    restart: unless-stopped
+    ports:
+      - "1025:1025" # smtp
+      - "8025:8025" # web ui
+    networks:
+      - redaxify_dev_network
+
+  # Local Stripe API mock - replaces real Stripe for server-side API calls.
+  # Note: the browser-side Stripe.js checkout still talks to the real
+  # js.stripe.com/api.stripe.com and cannot complete a real charge offline.
+  stripe-mock:
+    image: stripe/stripe-mock:latest
+    container_name: redaxify_stripe_mock
+    restart: unless-stopped
+    ports:
+      - "12111:12111"
+      - "12112:12112"
+    networks:
+      - redaxify_dev_network
+
+  migrate:
+    build:
+      context: ./redaxify-backend
+      target: migrator
+    container_name: redaxify_migrate
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      DIRECT_URL: ${DIRECT_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - redaxify_dev_network
+
+  backend:
+    build:
+      context: ./redaxify-backend
+    container_name: redaxify-backend
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      DIRECT_URL: ${DIRECT_URL}
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING}
+      AZURE_STORAGE_CONTAINER_NAME: ${AZURE_STORAGE_CONTAINER_NAME}
+      AZURE_CONTAINER_NAME: ${AZURE_CONTAINER_NAME}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_SECURE: ${SMTP_SECURE}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      STRIPE_API_HOST: ${STRIPE_API_HOST}
+      STRIPE_API_PROTOCOL: ${STRIPE_API_PROTOCOL}
+      STRIPE_API_PORT: ${STRIPE_API_PORT}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY}
+      MOCK_EXTERNAL_SERVICES: ${MOCK_EXTERNAL_SERVICES}
+      FRONTEND_ORIGIN: ${FRONTEND_ORIGIN}
+      LOCAL_FRONTEND_ORIGIN: ${LOCAL_FRONTEND_ORIGIN}
+      NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
+      DOMAIN: ${DOMAIN}
+      AUTH_SECRET: ${AUTH_SECRET}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      TOKEN_SECRET: ${TOKEN_SECRET}
+      EMAIL: ${EMAIL}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD}
+      GMAIL_APP_PASSWORD: ${GMAIL_APP_PASSWORD}
+      API_ENDPOINT: ${API_ENDPOINT}
+      LOCATION: ${LOCATION}
+      CLIENT_ID: ${CLIENT_ID}
+      CLIENT_SECRET: ${CLIENT_SECRET}
+      TENANT_ID: ${TENANT_ID}
+      SUBSCRIPTION_ID: ${SUBSCRIPTION_ID}
+      RESOURCE_GROUP: ${RESOURCE_GROUP}
+      VI_ACCOUNT_ID: ${VI_ACCOUNT_ID}
+      VI_ACCOUNT_NAME: ${VI_ACCOUNT_NAME}
+      AZURE_FORM_RECOGNIZER_KEY: ${AZURE_FORM_RECOGNIZER_KEY}
+      AZURE_FORM_RECOGNIZER_ENDPOINT: ${AZURE_FORM_RECOGNIZER_ENDPOINT}
+      AZURE_CV_KEY: ${AZURE_CV_KEY}
+      AZURE_CV_ENDPOINT: ${AZURE_CV_ENDPOINT}
+      AZURE_OPENAI_API_KEY: ${AZURE_OPENAI_API_KEY}
+      AZURE_OPENAI_ENDPOINT: ${AZURE_OPENAI_ENDPOINT}
+      AZURE_OPENAI_DEPLOYMENT_NAME: ${AZURE_OPENAI_DEPLOYMENT_NAME}
+      OPENAI_API_VERSION: ${OPENAI_API_VERSION}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+    ports:
+      - "4000:4000"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      azurite:
+        condition: service_started
+      mailpit:
+        condition: service_started
+      stripe-mock:
+        condition: service_started
+    networks:
+      - redaxify_dev_network
+    restart: unless-stopped
+
+  backend-ui:
+    build:
+      context: ./redaxify-backend-ui
+      args:
+        NEXT_PUBLIC_REDAXIFY_BACKEND_URL: ${NEXT_PUBLIC_REDAXIFY_BACKEND_URL}
+        NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
+        NEXT_PUBLIC_AZURE_STORAGE_CONTAINER_NAME: ${NEXT_PUBLIC_AZURE_STORAGE_CONTAINER_NAME}
+        NEXT_PUBLIC_AZURE_STORAGE_CONNECTION_STRING: ${NEXT_PUBLIC_AZURE_STORAGE_CONNECTION_STRING}
+        NEXT_PUBLIC_AZURE_OPENAI_ENDPOINT: ${NEXT_PUBLIC_AZURE_OPENAI_ENDPOINT}
+        NEXT_PUBLIC_AZURE_OPENAI_API_KEY: ${NEXT_PUBLIC_AZURE_OPENAI_API_KEY}
+        NEXT_PUBLIC_AZURE_OPENAI_DEPLOYMENT_NAME: ${NEXT_PUBLIC_AZURE_OPENAI_DEPLOYMENT_NAME}
+        NEXT_PUBLIC_OPENAI_API_VERSION: ${NEXT_PUBLIC_OPENAI_API_VERSION}
+        NEXT_PUBLIC_API_ENDPOINT: ${NEXT_PUBLIC_API_ENDPOINT}
+        NEXT_PUBLIC_LOCATION: ${NEXT_PUBLIC_LOCATION}
+        NEXT_PUBLIC_CLIENT_ID: ${NEXT_PUBLIC_CLIENT_ID}
+        NEXT_PUBLIC_CLIENT_SECRET: ${NEXT_PUBLIC_CLIENT_SECRET}
+        NEXT_PUBLIC_TENANT_ID: ${NEXT_PUBLIC_TENANT_ID}
+        NEXT_PUBLIC_SUBSCRIPTION_ID: ${NEXT_PUBLIC_SUBSCRIPTION_ID}
+        NEXT_PUBLIC_RESOURCE_GROUP: ${NEXT_PUBLIC_RESOURCE_GROUP}
+        NEXT_PUBLIC_VI_ACCOUNT_ID: ${NEXT_PUBLIC_VI_ACCOUNT_ID}
+        NEXT_PUBLIC_VI_ACCOUNT_NAME: ${NEXT_PUBLIC_VI_ACCOUNT_NAME}
+        NEXT_PUBLIC_VI_LOCATION: ${NEXT_PUBLIC_VI_LOCATION}
+    container_name: redaxify-backend-ui
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      DIRECT_URL: ${DIRECT_URL}
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING}
+      AZURE_STORAGE_CONTAINER_NAME: ${AZURE_STORAGE_CONTAINER_NAME}
+      AZURE_CONTAINER_NAME: ${AZURE_CONTAINER_NAME}
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT}
+      SMTP_SECURE: ${SMTP_SECURE}
+      SMTP_USER: ${SMTP_USER}
+      SMTP_PASS: ${SMTP_PASS}
+      MOCK_EXTERNAL_SERVICES: ${MOCK_EXTERNAL_SERVICES}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+      TOKEN_SECRET: ${TOKEN_SECRET}
+      EMAIL: ${EMAIL}
+      EMAIL_PASSWORD: ${EMAIL_PASSWORD}
+      # Server-side code in this app re-reads these under their NEXT_PUBLIC_ names too.
+      NEXT_PUBLIC_REDAXIFY_BACKEND_URL: ${NEXT_PUBLIC_REDAXIFY_BACKEND_URL}
+      NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: ${NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY}
+      NEXT_PUBLIC_AZURE_STORAGE_CONTAINER_NAME: ${NEXT_PUBLIC_AZURE_STORAGE_CONTAINER_NAME}
+      NEXT_PUBLIC_AZURE_STORAGE_CONNECTION_STRING: ${NEXT_PUBLIC_AZURE_STORAGE_CONNECTION_STRING}
+      NEXT_PUBLIC_AZURE_OPENAI_ENDPOINT: ${NEXT_PUBLIC_AZURE_OPENAI_ENDPOINT}
+      NEXT_PUBLIC_AZURE_OPENAI_API_KEY: ${NEXT_PUBLIC_AZURE_OPENAI_API_KEY}
+      NEXT_PUBLIC_AZURE_OPENAI_DEPLOYMENT_NAME: ${NEXT_PUBLIC_AZURE_OPENAI_DEPLOYMENT_NAME}
+      NEXT_PUBLIC_OPENAI_API_VERSION: ${NEXT_PUBLIC_OPENAI_API_VERSION}
+      NEXT_PUBLIC_API_ENDPOINT: ${NEXT_PUBLIC_API_ENDPOINT}
+      NEXT_PUBLIC_LOCATION: ${NEXT_PUBLIC_LOCATION}
+      NEXT_PUBLIC_CLIENT_ID: ${NEXT_PUBLIC_CLIENT_ID}
+      NEXT_PUBLIC_CLIENT_SECRET: ${NEXT_PUBLIC_CLIENT_SECRET}
+      NEXT_PUBLIC_TENANT_ID: ${NEXT_PUBLIC_TENANT_ID}
+      NEXT_PUBLIC_SUBSCRIPTION_ID: ${NEXT_PUBLIC_SUBSCRIPTION_ID}
+      NEXT_PUBLIC_RESOURCE_GROUP: ${NEXT_PUBLIC_RESOURCE_GROUP}
+      NEXT_PUBLIC_VI_ACCOUNT_ID: ${NEXT_PUBLIC_VI_ACCOUNT_ID}
+      NEXT_PUBLIC_VI_ACCOUNT_NAME: ${NEXT_PUBLIC_VI_ACCOUNT_NAME}
+      NEXT_PUBLIC_VI_LOCATION: ${NEXT_PUBLIC_VI_LOCATION}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET}
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
+      azurite:
+        condition: service_started
+      mailpit:
+        condition: service_started
+    networks:
+      - redaxify_dev_network
+    restart: unless-stopped
+
+volumes:
+  postgres_dev_data:
+  azurite_data:
+
+networks:
+  redaxify_dev_network:
+    driver: bridge
