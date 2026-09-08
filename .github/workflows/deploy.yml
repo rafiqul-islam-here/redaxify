@@ -171,7 +171,6 @@ jobs:
       - name: Build backend UI image
         run: |
           podman build \
-            --file redaxify-backend-ui/dockerfile \
             --build-arg NEXT_PUBLIC_REDAXIFY_BACKEND_URL="${{ vars.NEXT_PUBLIC_REDAXIFY_BACKEND_URL }}" \
             --build-arg NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY="${{ vars.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY }}" \
             --build-arg NEXT_PUBLIC_AZURE_STORAGE_CONTAINER_NAME="${{ vars.NEXT_PUBLIC_AZURE_STORAGE_CONTAINER_NAME }}" \
