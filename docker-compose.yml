@@ -28,57 +28,57 @@ services:
           memory: 512M
 
   # Local Azure Blob Storage emulator - replaces the real Azure Storage account.
-  azurite:
-    image: mcr.microsoft.com/azure-storage/azurite:latest
-    container_name: redaxify_azurite
-    restart: unless-stopped
-    command: "azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --location /data"
-    volumes:
-      - azurite_data:/data
-    ports:
-      - "10000:10000" # blob
-      - "10001:10001" # queue
-      - "10002:10002" # table
-    networks:
-      - redaxify_dev_network
+  # azurite:
+  #   image: mcr.microsoft.com/azure-storage/azurite:latest
+  #   container_name: redaxify_azurite
+  #   restart: unless-stopped
+  #   command: "azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --location /data"
+  #   volumes:
+  #     - azurite_data:/data
+  #   ports:
+  #     - "10000:10000" # blob
+  #     - "10001:10001" # queue
+  #     - "10002:10002" # table
+  #   networks:
+  #     - redaxify_dev_network
 
   # Local SMTP catcher - replaces real Gmail SMTP. Web UI: http://localhost:8025
-  mailpit:
-    image: axllent/mailpit:latest
-    container_name: redaxify_mailpit
-    restart: unless-stopped
-    ports:
-      - "1025:1025" # smtp
-      - "8025:8025" # web ui
-    networks:
-      - redaxify_dev_network
+  # mailpit:
+  #   image: axllent/mailpit:latest
+  #   container_name: redaxify_mailpit
+  #   restart: unless-stopped
+  #   ports:
+  #     - "1025:1025" # smtp
+  #     - "8025:8025" # web ui
+  #   networks:
+  #     - redaxify_dev_network
 
   # Local Stripe API mock - replaces real Stripe for server-side API calls.
   # Note: the browser-side Stripe.js checkout still talks to the real
   # js.stripe.com/api.stripe.com and cannot complete a real charge offline.
-  stripe-mock:
-    image: stripe/stripe-mock:latest
-    container_name: redaxify_stripe_mock
-    restart: unless-stopped
-    ports:
-      - "12111:12111"
-      - "12112:12112"
-    networks:
-      - redaxify_dev_network
+  # stripe-mock:
+  #   image: stripe/stripe-mock:latest
+  #   container_name: redaxify_stripe_mock
+  #   restart: unless-stopped
+  #   ports:
+  #     - "12111:12111"
+  #     - "12112:12112"
+  #   networks:
+  #     - redaxify_dev_network
 
-  migrate:
-    build:
-      context: ./redaxify-backend
-      target: migrator
-    container_name: redaxify_migrate
-    environment:
-      DATABASE_URL: ${DATABASE_URL}
-      DIRECT_URL: ${DIRECT_URL}
-    depends_on:
-      db:
-        condition: service_healthy
-    networks:
-      - redaxify_dev_network
+  # migrate:
+  #   build:
+  #     context: ./redaxify-backend
+  #     target: migrator
+  #   container_name: redaxify_migrate
+  #   environment:
+  #     DATABASE_URL: ${DATABASE_URL}
+  #     DIRECT_URL: ${DIRECT_URL}
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+  #   networks:
+  #     - redaxify_dev_network
 
   backend:
     build:
@@ -134,14 +134,14 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
-      azurite:
-        condition: service_started
-      mailpit:
-        condition: service_started
-      stripe-mock:
-        condition: service_started
+      # migrate:
+      #   condition: service_completed_successfully
+      # azurite:
+      #   condition: service_started
+      # mailpit:
+      #   condition: service_started
+      # stripe-mock:
+      #   condition: service_started
     networks:
       - redaxify_dev_network
     restart: unless-stopped
@@ -211,14 +211,14 @@ services:
     depends_on:
       db:
         condition: service_healthy
-      migrate:
-        condition: service_completed_successfully
+      # migrate:
+      #   condition: service_completed_successfully
       backend:
         condition: service_started
-      azurite:
-        condition: service_started
-      mailpit:
-        condition: service_started
+      # azurite:
+      #   condition: service_started
+      # mailpit:
+      #   condition: service_started
     networks:
       - redaxify_dev_network
     restart: unless-stopped
