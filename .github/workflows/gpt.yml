@@ -149,7 +149,7 @@ jobs:
       - name: Build backend image
         run: |
           podman build \
-            --file redaxify-backend/dockerfile \
+            --file redaxify-backend/Dockerfile \
             --tag "$BACKEND_LATEST" \
             --tag "$BACKEND_COMMIT" \
             ./redaxify-backend
@@ -163,7 +163,7 @@ jobs:
       - name: Build migration image
         run: |
           podman build \
-            --file redaxify-backend/dockerfile \
+            --file redaxify-backend/Dockerfile \
             --target migrator \
             --tag "$MIGRATE_IMAGE" \
             ./redaxify-backend
