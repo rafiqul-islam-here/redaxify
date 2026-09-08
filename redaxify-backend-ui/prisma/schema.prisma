@@ -1,0 +1,216 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  user
+  admin
+  support
+  marketing
+}
+
+enum ReplyStatus {
+  PENDING
+  REPLIED
+}
+
+model Users {
+  id                     Int            @id @default(autoincrement())
+  customerNumber         Int            @unique
+  name                   String
+  email                  String         @unique
+  password               String? // Make password nullable (OAuth users don't have passwords)
+  provider               String? // "google", "github" etc.
+  providerId             String? // Store OAuth provider's user ID
+  userType               String         @default("regular")
+  userAuth               Boolean        @default(false)
+  permission             Boolean        @default(true)
+  userRole               UserRole       @default(user)
+  otp                    String?
+  otpExpires             DateTime?
+  mailVerifytoken        String?
+  mailVerifytokenExpires DateTime?
+  stripeCustomerId       String?        @unique
+  currentSubscriptionId  Int?
+  createdAt              DateTime       @default(now())
+  updatedAt              DateTime?      @updatedAt
+  folders                Folder[]
+  videos                 Video[]
+  images                 Image[]
+  bills                  Bill[]
+  subscriptions          Subscription[]
+  coupons                Coupon[]       @relation("UserCoupons")
+  couponUsages           CouponUsage[]
+}
+
+model Activity {
+  id           Int      @id @default(autoincrement())
+  userName     String
+  email        String
+  timeStamp    DateTime
+  activityType String
+  description  String
+  userAgent    String?
+  ipAddress    String?
+  latitute     String?
+  longitute    String?
+  status       Int?
+}
+
+model Folder {
+  id             Int      @id @default(autoincrement())
+  customerNumber Int
+  folderName     String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  videos         Video[]
+  user           Users    @relation(fields: [customerNumber], references: [customerNumber])
+}
+
+model Video {
+  id             Int       @id @default(autoincrement())
+  azureVideoId   String
+  indexerVideoId String?
+  customerNumber Int
+  videoName      String
+  videoSize      Int
+  videoDuration  Int
+  imageLocation  String?
+  videoLocation  String
+  folderId       Int?
+  indexingStatus String    @default("PENDING")
+  indexedAt      DateTime?
+  jsonResults    Json?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  user   Users   @relation(fields: [customerNumber], references: [customerNumber])
+  folder Folder? @relation(fields: [folderId], references: [id]) // Optional folder relation
+}
+
+model Image {
+  id             Int    @id @default(autoincrement())
+  customerNumber Int
+  imageName      String
+  imageLocation  String
+  user           Users  @relation(fields: [customerNumber], references: [customerNumber])
+}
+
+model Subscription {
+  id          Int                @id @default(autoincrement())
+  userId      Int
+  planId      Int
+  status      SubscriptionStatus @default(ACTIVE)
+  startDate   DateTime
+  endDate     DateTime
+  isTrial     Boolean            @default(false)
+  stripeSubId String?            @unique
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+
+  user Users            @relation(fields: [userId], references: [id])
+  plan SubscriptionPlan @relation(fields: [planId], references: [id], name: "SubscriptionPlanRelation")
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELED
+  EXPIRED
+  PAUSED
+  TRIAL
+}
+
+model SubscriptionPlan {
+  id            Int            @id @default(autoincrement())
+  name          String         @unique
+  description   String?
+  price         Float
+  gpuLimit      Int
+  storageLimit  Int
+  durationDays  Int
+  isActive      Boolean        @default(true)
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  bills         Bill[]
+  subscriptions Subscription[] @relation("SubscriptionPlanRelation")
+}
+
+model Bill {
+  id                    Int           @id @default(autoincrement())
+  customerNumber        Int
+  subscriptionId        Int
+  totalBill             Float
+  gpuUsed               Int
+  storageUsed           Int
+  paymentStatus         PaymentStatus @default(PENDING)
+  startDate             DateTime
+  endDate               DateTime
+  stripePaymentIntentId String?
+  stripeCustomerId      String?
+  stripeInvoiceUrl      String?
+
+  user         Users            @relation(fields: [customerNumber], references: [customerNumber])
+  subscription SubscriptionPlan @relation(fields: [subscriptionId], references: [id])
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  CANCELLED
+}
+
+model Coupon {
+  id            Int           @id @default(autoincrement())
+  code          String        @unique
+  discountValue Float
+  discountType  String
+  startDate     DateTime
+  endDate       DateTime
+  isActive      Boolean       @default(true)
+  usageLimit    Int           @default(2)
+  userId        Int?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  user          Users?        @relation("UserCoupons", fields: [userId], references: [id])
+  usages        CouponUsage[]
+}
+
+model CouponUsage {
+  couponId  Int
+  userId    Int
+  timesUsed Int @default(1)
+
+  coupon Coupon @relation(fields: [couponId], references: [id])
+  user   Users  @relation(fields: [userId], references: [id])
+
+  @@id([couponId, userId])
+}
+
+model Feedback {
+  id           Int         @id @default(autoincrement())
+  email        String
+  firstName    String?
+  lastName     String?
+  number       String?
+  subject      String
+  message      String
+  replyStatus  ReplyStatus @default(PENDING)
+  replyMessage String?
+  replySubject String?
+  replyTime    DateTime?
+  createdAt    DateTime    @default(now())
+}
