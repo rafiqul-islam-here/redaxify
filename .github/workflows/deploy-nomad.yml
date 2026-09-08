@@ -1,0 +1,263 @@
+# name: Build and Deploy to Nomad
+
+# on:
+#   push:
+#     branches:
+#       - testmain
+#   workflow_dispatch:
+
+# env:
+#   APP_NAME: ${{ vars.APP_NAME }}
+#   REGISTRY_PORT: ${{ vars.REGISTRY_PORT }}
+#   VPS_NETBIRD_IP: ${{ vars.VPS_NETBIRD_IP }}
+
+# jobs:
+#   build-push-deploy:
+#     name: Build, Push and Deploy
+#     runs-on: ubuntu-latest
+
+#     permissions:
+#       contents: read
+
+#     steps:
+
+#       # ------------------------------------------------------------
+#       # 1. Checkout
+#       # ------------------------------------------------------------
+#       - name: Checkout source code
+#         uses: actions/checkout@v4
+
+#       # ------------------------------------------------------------
+#       # 2. Install Podman
+#       # ------------------------------------------------------------
+#       - name: Install Podman
+#         run: |
+#           sudo apt-get update
+#           sudo apt-get install -y podman
+#           podman --version
+
+#       # ------------------------------------------------------------
+#       # 3. Install NetBird
+#       # ------------------------------------------------------------
+#       - name: Install NetBird
+#         run: |
+#           curl -fsSL https://pkgs.netbird.io/install.sh | sh
+#           netbird version
+
+#       # ------------------------------------------------------------
+#       # 4. Connect GitHub Runner to NetBird
+#       # ------------------------------------------------------------
+#       - name: Connect to NetBird
+#         run: |
+#           sudo netbird up \
+#             --setup-key "${{ secrets.NETBIRD_SETUP_KEY }}"
+
+#           echo "Waiting for NetBird connection..."
+
+#           for i in {1..30}; do
+#             STATUS=$(sudo netbird status 2>/dev/null || true)
+
+#             if echo "$STATUS" | grep -qi "Connected"; then
+#               echo "NetBird connected successfully."
+#               break
+#             fi
+
+#             if [ "$i" -eq 30 ]; then
+#               echo "Failed to connect to NetBird."
+#               exit 1
+#             fi
+
+#             sleep 2
+#           done
+
+#           sudo netbird status
+
+#       # ------------------------------------------------------------
+#       # 5. Configure registry/image names
+#       # ------------------------------------------------------------
+#       - name: Configure deployment
+#         run: |
+#           REGISTRY="${VPS_NETBIRD_IP}:${REGISTRY_PORT}"
+
+#           APP_IMAGE="${REGISTRY}/${APP_NAME}:${GITHUB_SHA::7}"
+#           POSTGRES_IMAGE="${REGISTRY}/postgres:15-alpine"
+
+#           echo "REGISTRY=${REGISTRY}" >> "$GITHUB_ENV"
+#           echo "APP_IMAGE=${APP_IMAGE}" >> "$GITHUB_ENV"
+#           echo "POSTGRES_IMAGE=${POSTGRES_IMAGE}" >> "$GITHUB_ENV"
+
+#           echo "Registry: ${REGISTRY}"
+#           echo "Application image: ${APP_IMAGE}"
+#           echo "PostgreSQL image: ${POSTGRES_IMAGE}"
+
+#       # ------------------------------------------------------------
+#       # 6. Test private registry
+#       # ------------------------------------------------------------
+#       - name: Test registry connection
+#         run: |
+#           echo "Testing registry..."
+
+#           timeout 10 bash -c \
+#             "cat < /dev/null > /dev/tcp/${VPS_NETBIRD_IP}/${REGISTRY_PORT}"
+
+#           curl \
+#             --fail \
+#             --connect-timeout 10 \
+#             "http://${REGISTRY}/v2/"
+
+#           echo "Private registry is reachable."
+
+#       # ------------------------------------------------------------
+#       # 7. Build NextMailer application image
+#       # ------------------------------------------------------------
+#       - name: Build application image
+#         run: |
+#           podman build \
+#             --file dockerfile \
+#             --tag "$APP_IMAGE" \
+#             .
+
+#           echo "Application image built."
+
+#       # ------------------------------------------------------------
+#       # 8. Push NextMailer application image
+#       # ------------------------------------------------------------
+#       - name: Push application image
+#         run: |
+#           podman push \
+#             --tls-verify=false \
+#             "$APP_IMAGE"
+
+#           echo "Application image pushed:"
+#           echo "$APP_IMAGE"
+
+#       # ------------------------------------------------------------
+#       # 9. Pull official PostgreSQL image
+#       # ------------------------------------------------------------
+#       - name: Pull PostgreSQL image
+#         run: |
+#           podman pull docker.io/library/postgres:15-alpine
+
+#       # ------------------------------------------------------------
+#       # 10. Retag PostgreSQL for private registry
+#       # ------------------------------------------------------------
+#       - name: Tag PostgreSQL image
+#         run: |
+#           podman tag \
+#             docker.io/library/postgres:15-alpine \
+#             "$POSTGRES_IMAGE"
+
+#           echo "PostgreSQL image tagged:"
+#           echo "$POSTGRES_IMAGE"
+
+#       # ------------------------------------------------------------
+#       # 11. Push PostgreSQL image
+#       # ------------------------------------------------------------
+#       - name: Push PostgreSQL image
+#         run: |
+#           podman push \
+#             --tls-verify=false \
+#             "$POSTGRES_IMAGE"
+
+#           echo "PostgreSQL image pushed:"
+#           echo "$POSTGRES_IMAGE"
+
+#       # ------------------------------------------------------------
+#       # 12. Install Nomad
+#       # ------------------------------------------------------------
+#       - name: Install Nomad
+#         run: |
+#           curl -fsSL https://apt.releases.hashicorp.com/gpg \
+#             | sudo gpg --dearmor \
+#             -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+
+#           echo \
+#             "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
+#             https://apt.releases.hashicorp.com \
+#             $(lsb_release -cs) main" \
+#             | sudo tee /etc/apt/sources.list.d/hashicorp.list
+
+#           sudo apt-get update
+#           sudo apt-get install -y nomad
+
+#           nomad version
+
+#       # ------------------------------------------------------------
+#       # 13. Test Nomad
+#       # ------------------------------------------------------------
+#       - name: Test Nomad connection
+#         env:
+#           NOMAD_ADDR: http://${{ vars.VPS_NETBIRD_IP }}:4646
+#         run: |
+#           echo "=== Nomad Servers ==="
+#           nomad server members
+
+#           echo
+#           echo "=== Nomad Nodes ==="
+#           nomad node status
+
+#       # ------------------------------------------------------------
+#       # 14. Deploy production Nomad job
+#       # ------------------------------------------------------------
+#       - name: Deploy production job
+#         env:
+#           NOMAD_ADDR: http://${{ vars.VPS_NETBIRD_IP }}:4646
+#           DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+#           SECRET_KEY: ${{ secrets.SECRET_KEY }}
+#           EMAIL_HOST_PASSWORD: ${{ secrets.EMAIL_HOST_PASSWORD }}
+#           CLOUDFLARE_TUNNEL_TOKEN: ${{ secrets.CLOUDFLARE_TUNNEL_TOKEN }}
+#         run: |
+#           nomad job run \
+#             -namespace="prod" \
+#             -var="IMAGE=${APP_IMAGE}" \
+#             -var="POSTGRES_IMAGE=${POSTGRES_IMAGE}" \
+#             -var="DB_USER=${{ vars.DB_USER }}" \
+#             -var="DB_PASSWORD=${DB_PASSWORD}" \
+#             -var="DB_NAME=${{ vars.DB_NAME }}" \
+#             -var="DB_PORT=${{ vars.DB_PORT }}" \
+#             -var="SECRET_KEY=${SECRET_KEY}" \
+#             -var="EMAIL_HOST=${{ vars.EMAIL_HOST }}" \
+#             -var="EMAIL_PORT=${{ vars.EMAIL_PORT }}" \
+#             -var="EMAIL_USE_SSL=${{ vars.EMAIL_USE_SSL }}" \
+#             -var="EMAIL_USE_TLS=${{ vars.EMAIL_USE_TLS }}" \
+#             -var="EMAIL_HOST_USER=${{ vars.EMAIL_HOST_USER }}" \
+#             -var="EMAIL_HOST_PASSWORD=${EMAIL_HOST_PASSWORD}" \
+#             -var="MAIL_DEFAULT_SENDER=${{ vars.MAIL_DEFAULT_SENDER }}" \
+#             -var="CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}" \
+#             nomad/prod-job.hcl
+
+#           echo "Production deployment submitted."
+
+#       # ------------------------------------------------------------
+#       # 15. Verify deployment
+#       # ------------------------------------------------------------
+#       - name: Verify deployment
+#         env:
+#           NOMAD_ADDR: http://${{ vars.VPS_NETBIRD_IP }}:4646
+#         run: |
+#           echo "Waiting for allocation..."
+#           sleep 10
+
+#           echo "=== Job Status ==="
+#           nomad job status \
+#             -namespace="prod" \
+#             nextmailer
+
+#           echo
+#           echo "=== Allocations ==="
+#           nomad job allocs \
+#             -namespace="prod" \
+#             nextmailer
+
+#       # ------------------------------------------------------------
+#       # 16. Cleanup
+#       # ------------------------------------------------------------
+#       - name: Cleanup
+#         if: always()
+#         run: |
+#           podman rmi "$APP_IMAGE" 2>/dev/null || true
+#           podman rmi "$POSTGRES_IMAGE" 2>/dev/null || true
+
+#           sudo netbird down || true
+
+#           echo "Cleanup completed."

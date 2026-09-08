@@ -1,0 +1,454 @@
+name: Build and Deploy to Nomad
+
+on:
+  push:
+    branches:
+      - testmain
+  workflow_dispatch:
+
+env:
+  REGISTRY_PORT: ${{ vars.REGISTRY_PORT }}
+  VPS_NETBIRD_IP: ${{ vars.VPS_NETBIRD_IP }}
+
+jobs:
+  build-push-deploy:
+    name: Build, Push and Deploy
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+
+      # ------------------------------------------------------------
+      # 1. Checkout
+      # ------------------------------------------------------------
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+
+      # ------------------------------------------------------------
+      # 2. Install Podman
+      # ------------------------------------------------------------
+      - name: Install Podman
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman
+          podman --version
+
+
+      # ------------------------------------------------------------
+      # 3. Install NetBird
+      # ------------------------------------------------------------
+      - name: Install NetBird
+        run: |
+          curl -fsSL https://pkgs.netbird.io/install.sh | sh
+          netbird version
+
+
+      # ------------------------------------------------------------
+      # 4. Connect GitHub Runner to NetBird
+      # ------------------------------------------------------------
+      - name: Connect to NetBird
+        run: |
+          sudo netbird up \
+            --setup-key "${{ secrets.NETBIRD_SETUP_KEY }}"
+
+          echo "Waiting for NetBird connection..."
+
+          for i in {1..30}; do
+            STATUS=$(sudo netbird status 2>/dev/null || true)
+
+            if echo "$STATUS" | grep -qi "Connected"; then
+              echo "NetBird connected successfully."
+              break
+            fi
+
+            if [ "$i" -eq 30 ]; then
+              echo "Failed to connect to NetBird."
+              exit 1
+            fi
+
+            sleep 2
+          done
+
+          sudo netbird status
+
+
+      # ------------------------------------------------------------
+      # 5. Configure Registry and Image Names
+      # ------------------------------------------------------------
+      - name: Configure deployment
+        run: |
+          REGISTRY="${VPS_NETBIRD_IP}:${REGISTRY_PORT}"
+          COMMIT_ID="${GITHUB_SHA::7}"
+
+          echo "REGISTRY=${REGISTRY}" >> "$GITHUB_ENV"
+          echo "COMMIT_ID=${COMMIT_ID}" >> "$GITHUB_ENV"
+
+          # Application images
+          echo "BACKEND_LATEST=${REGISTRY}/redaxify-backend:latest" >> "$GITHUB_ENV"
+          echo "BACKEND_COMMIT=${REGISTRY}/redaxify-backend:${COMMIT_ID}" >> "$GITHUB_ENV"
+
+          echo "BACKEND_UI_LATEST=${REGISTRY}/redaxify-backend-ui:latest" >> "$GITHUB_ENV"
+          echo "BACKEND_UI_COMMIT=${REGISTRY}/redaxify-backend-ui:${COMMIT_ID}" >> "$GITHUB_ENV"
+
+          # Migration image
+          echo "MIGRATE_IMAGE=${REGISTRY}/redaxify-migrate:${COMMIT_ID}" >> "$GITHUB_ENV"
+
+          # Supporting images
+          echo "POSTGRES_IMAGE=${REGISTRY}/postgres:15-alpine" >> "$GITHUB_ENV"
+          echo "AZURITE_IMAGE=${REGISTRY}/azurite:latest" >> "$GITHUB_ENV"
+          echo "MAILPIT_IMAGE=${REGISTRY}/mailpit:latest" >> "$GITHUB_ENV"
+          echo "STRIPE_MOCK_IMAGE=${REGISTRY}/stripe-mock:latest" >> "$GITHUB_ENV"
+
+          echo "======================================"
+          echo "Registry: ${REGISTRY}"
+          echo "Commit ID: ${COMMIT_ID}"
+          echo "======================================"
+
+          echo "Backend:"
+          echo "  ${REGISTRY}/redaxify-backend:latest"
+          echo "  ${REGISTRY}/redaxify-backend:${COMMIT_ID}"
+
+          echo "Backend UI:"
+          echo "  ${REGISTRY}/redaxify-backend-ui:latest"
+          echo "  ${REGISTRY}/redaxify-backend-ui:${COMMIT_ID}"
+
+          echo "Migration:"
+          echo "  ${REGISTRY}/redaxify-migrate:${COMMIT_ID}"
+
+          echo "Supporting images:"
+          echo "  ${REGISTRY}/postgres:15-alpine"
+          echo "  ${REGISTRY}/azurite:latest"
+          echo "  ${REGISTRY}/mailpit:latest"
+          echo "  ${REGISTRY}/stripe-mock:latest"
+
+
+      # ------------------------------------------------------------
+      # 6. Test Private Registry
+      # ------------------------------------------------------------
+      - name: Test registry connection
+        run: |
+          echo "Testing registry..."
+
+          timeout 10 bash -c \
+            "cat < /dev/null > /dev/tcp/${VPS_NETBIRD_IP}/${REGISTRY_PORT}"
+
+          curl \
+            --fail \
+            --connect-timeout 10 \
+            "http://${REGISTRY}/v2/"
+
+          echo "Private registry is reachable."
+
+
+      # ------------------------------------------------------------
+      # 7. Build Backend Image
+      # ------------------------------------------------------------
+      - name: Build backend image
+        run: |
+          podman build \
+            --file redaxify-backend/dockerfile \
+            --tag "$BACKEND_LATEST" \
+            --tag "$BACKEND_COMMIT" \
+            ./redaxify-backend
+
+          echo "Backend image built."
+
+
+      # ------------------------------------------------------------
+      # 8. Build Migration Image
+      # ------------------------------------------------------------
+      - name: Build migration image
+        run: |
+          podman build \
+            --file redaxify-backend/dockerfile \
+            --target migrator \
+            --tag "$MIGRATE_IMAGE" \
+            ./redaxify-backend
+
+          echo "Migration image built."
+
+
+      # ------------------------------------------------------------
+      # 9. Build Backend UI Image
+      # ------------------------------------------------------------
+      - name: Build backend UI image
+        run: |
+          podman build \
+            --file redaxify-backend-ui/dockerfile \
+            --build-arg NEXT_PUBLIC_REDAXIFY_BACKEND_URL="${{ vars.NEXT_PUBLIC_REDAXIFY_BACKEND_URL }}" \
+            --build-arg NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY="${{ vars.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY }}" \
+            --build-arg NEXT_PUBLIC_AZURE_STORAGE_CONTAINER_NAME="${{ vars.NEXT_PUBLIC_AZURE_STORAGE_CONTAINER_NAME }}" \
+            --build-arg NEXT_PUBLIC_AZURE_STORAGE_CONNECTION_STRING="${{ vars.NEXT_PUBLIC_AZURE_STORAGE_CONNECTION_STRING }}" \
+            --build-arg NEXT_PUBLIC_AZURE_OPENAI_ENDPOINT="${{ vars.NEXT_PUBLIC_AZURE_OPENAI_ENDPOINT }}" \
+            --build-arg NEXT_PUBLIC_AZURE_OPENAI_API_KEY="${{ secrets.NEXT_PUBLIC_AZURE_OPENAI_API_KEY }}" \
+            --build-arg NEXT_PUBLIC_AZURE_OPENAI_DEPLOYMENT_NAME="${{ vars.NEXT_PUBLIC_AZURE_OPENAI_DEPLOYMENT_NAME }}" \
+            --build-arg NEXT_PUBLIC_OPENAI_API_VERSION="${{ vars.NEXT_PUBLIC_OPENAI_API_VERSION }}" \
+            --build-arg NEXT_PUBLIC_API_ENDPOINT="${{ vars.NEXT_PUBLIC_API_ENDPOINT }}" \
+            --build-arg NEXT_PUBLIC_LOCATION="${{ vars.NEXT_PUBLIC_LOCATION }}" \
+            --build-arg NEXT_PUBLIC_CLIENT_ID="${{ secrets.NEXT_PUBLIC_CLIENT_ID }}" \
+            --build-arg NEXT_PUBLIC_CLIENT_SECRET="${{ secrets.NEXT_PUBLIC_CLIENT_SECRET }}" \
+            --build-arg NEXT_PUBLIC_TENANT_ID="${{ secrets.NEXT_PUBLIC_TENANT_ID }}" \
+            --build-arg NEXT_PUBLIC_SUBSCRIPTION_ID="${{ secrets.NEXT_PUBLIC_SUBSCRIPTION_ID }}" \
+            --build-arg NEXT_PUBLIC_RESOURCE_GROUP="${{ vars.NEXT_PUBLIC_RESOURCE_GROUP }}" \
+            --build-arg NEXT_PUBLIC_VI_ACCOUNT_ID="${{ vars.NEXT_PUBLIC_VI_ACCOUNT_ID }}" \
+            --build-arg NEXT_PUBLIC_VI_ACCOUNT_NAME="${{ vars.NEXT_PUBLIC_VI_ACCOUNT_NAME }}" \
+            --build-arg NEXT_PUBLIC_VI_LOCATION="${{ vars.NEXT_PUBLIC_VI_LOCATION }}" \
+            --tag "$BACKEND_UI_LATEST" \
+            --tag "$BACKEND_UI_COMMIT" \
+            ./redaxify-backend-ui
+
+          echo "Backend UI image built."
+
+
+      # ------------------------------------------------------------
+      # 10. Pull PostgreSQL
+      # ------------------------------------------------------------
+      - name: Pull PostgreSQL image
+        run: |
+          podman pull docker.io/library/postgres:15-alpine
+
+          podman tag \
+            docker.io/library/postgres:15-alpine \
+            "$POSTGRES_IMAGE"
+
+          echo "PostgreSQL image prepared."
+
+
+      # ------------------------------------------------------------
+      # 11. Pull Azurite
+      # ------------------------------------------------------------
+      - name: Pull Azurite image
+        run: |
+          podman pull mcr.microsoft.com/azure-storage/azurite:latest
+
+          podman tag \
+            mcr.microsoft.com/azure-storage/azurite:latest \
+            "$AZURITE_IMAGE"
+
+          echo "Azurite image prepared."
+
+
+      # ------------------------------------------------------------
+      # 12. Pull Mailpit
+      # ------------------------------------------------------------
+      - name: Pull Mailpit image
+        run: |
+          podman pull docker.io/axllent/mailpit:latest
+
+          podman tag \
+            docker.io/axllent/mailpit:latest \
+            "$MAILPIT_IMAGE"
+
+          echo "Mailpit image prepared."
+
+
+      # ------------------------------------------------------------
+      # 13. Pull Stripe Mock
+      # ------------------------------------------------------------
+      - name: Pull Stripe Mock image
+        run: |
+          podman pull docker.io/stripe/stripe-mock:latest
+
+          podman tag \
+            docker.io/stripe/stripe-mock:latest \
+            "$STRIPE_MOCK_IMAGE"
+
+          echo "Stripe Mock image prepared."
+
+
+      # ------------------------------------------------------------
+      # 14. Push Backend Images
+      # ------------------------------------------------------------
+      - name: Push backend images
+        run: |
+          podman push \
+            --tls-verify=false \
+            "$BACKEND_LATEST"
+
+          podman push \
+            --tls-verify=false \
+            "$BACKEND_COMMIT"
+
+          echo "Backend images pushed."
+
+
+      # ------------------------------------------------------------
+      # 15. Push Backend UI Images
+      # ------------------------------------------------------------
+      - name: Push backend UI images
+        run: |
+          podman push \
+            --tls-verify=false \
+            "$BACKEND_UI_LATEST"
+
+          podman push \
+            --tls-verify=false \
+            "$BACKEND_UI_COMMIT"
+
+          echo "Backend UI images pushed."
+
+
+      # ------------------------------------------------------------
+      # 16. Push Migration Image
+      # ------------------------------------------------------------
+      - name: Push migration image
+        run: |
+          podman push \
+            --tls-verify=false \
+            "$MIGRATE_IMAGE"
+
+          echo "Migration image pushed."
+
+
+      # ------------------------------------------------------------
+      # 17. Push PostgreSQL
+      # ------------------------------------------------------------
+      - name: Push PostgreSQL image
+        run: |
+          podman push \
+            --tls-verify=false \
+            "$POSTGRES_IMAGE"
+
+          echo "PostgreSQL image pushed."
+
+
+      # ------------------------------------------------------------
+      # 18. Push Azurite
+      # ------------------------------------------------------------
+      - name: Push Azurite image
+        run: |
+          podman push \
+            --tls-verify=false \
+            "$AZURITE_IMAGE"
+
+          echo "Azurite image pushed."
+
+
+      # ------------------------------------------------------------
+      # 19. Push Mailpit
+      # ------------------------------------------------------------
+      - name: Push Mailpit image
+        run: |
+          podman push \
+            --tls-verify=false \
+            "$MAILPIT_IMAGE"
+
+          echo "Mailpit image pushed."
+
+
+      # ------------------------------------------------------------
+      # 20. Push Stripe Mock
+      # ------------------------------------------------------------
+      - name: Push Stripe Mock image
+        run: |
+          podman push \
+            --tls-verify=false \
+            "$STRIPE_MOCK_IMAGE"
+
+          echo "Stripe Mock image pushed."
+
+
+      # ------------------------------------------------------------
+      # 21. Install Nomad
+      # ------------------------------------------------------------
+      - name: Install Nomad
+        run: |
+          curl -fsSL https://apt.releases.hashicorp.com/gpg \
+            | sudo gpg --dearmor \
+            -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+
+          echo \
+            "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
+            https://apt.releases.hashicorp.com \
+            $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/hashicorp.list
+
+          sudo apt-get update
+          sudo apt-get install -y nomad
+
+          nomad version
+
+
+      # ------------------------------------------------------------
+      # 22. Test Nomad Connection
+      # ------------------------------------------------------------
+      - name: Test Nomad connection
+        env:
+          NOMAD_ADDR: http://${{ vars.VPS_NETBIRD_IP }}:4646
+        run: |
+          echo "=== Nomad Servers ==="
+          nomad server members
+
+          echo
+          echo "=== Nomad Nodes ==="
+          nomad node status
+
+
+      # ------------------------------------------------------------
+      # 23. Deploy Nomad Job
+      # ------------------------------------------------------------
+      # The exact variables will be finalized against your
+      # Nomad HCL file.
+      # ------------------------------------------------------------
+      - name: Deploy Nomad job
+        env:
+          NOMAD_ADDR: http://${{ vars.VPS_NETBIRD_IP }}:4646
+        run: |
+          nomad job run \
+            -namespace="dev" \
+            -var="BACKEND_IMAGE=${BACKEND_COMMIT}" \
+            -var="BACKEND_UI_IMAGE=${BACKEND_UI_COMMIT}" \
+            -var="MIGRATE_IMAGE=${MIGRATE_IMAGE}" \
+            -var="POSTGRES_IMAGE=${POSTGRES_IMAGE}" \
+            -var="AZURITE_IMAGE=${AZURITE_IMAGE}" \
+            -var="MAILPIT_IMAGE=${MAILPIT_IMAGE}" \
+            -var="STRIPE_MOCK_IMAGE=${STRIPE_MOCK_IMAGE}" \
+            nomad/dev-job.hcl
+
+          echo "Dev deployment submitted."
+
+
+      # ------------------------------------------------------------
+      # 24. Verify Deployment
+      # ------------------------------------------------------------
+      - name: Verify deployment
+        env:
+          NOMAD_ADDR: http://${{ vars.VPS_NETBIRD_IP }}:4646
+        run: |
+          echo "Waiting for allocation..."
+          sleep 10
+
+          echo "=== Job Status ==="
+          nomad job status \
+            -namespace="dev" \
+            redaxify
+
+          echo
+          echo "=== Allocations ==="
+          nomad job allocs \
+            -namespace="dev" \
+            redaxify
+
+
+      # ------------------------------------------------------------
+      # 25. Cleanup
+      # ------------------------------------------------------------
+      - name: Cleanup
+        if: always()
+        run: |
+          podman rmi "$BACKEND_LATEST" 2>/dev/null || true
+          podman rmi "$BACKEND_COMMIT" 2>/dev/null || true
+          podman rmi "$BACKEND_UI_LATEST" 2>/dev/null || true
+          podman rmi "$BACKEND_UI_COMMIT" 2>/dev/null || true
+          podman rmi "$MIGRATE_IMAGE" 2>/dev/null || true
+          podman rmi "$POSTGRES_IMAGE" 2>/dev/null || true
+          podman rmi "$AZURITE_IMAGE" 2>/dev/null || true
+          podman rmi "$MAILPIT_IMAGE" 2>/dev/null || true
+          podman rmi "$STRIPE_MOCK_IMAGE" 2>/dev/null || true
+
+          sudo netbird down || true
+
+          echo "Cleanup completed."
