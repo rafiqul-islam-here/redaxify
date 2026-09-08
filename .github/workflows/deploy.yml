@@ -399,7 +399,7 @@ jobs:
             -var="AZURITE_IMAGE=${AZURITE_IMAGE}" \
             -var="MAILPIT_IMAGE=${MAILPIT_IMAGE}" \
             -var="STRIPE_MOCK_IMAGE=${STRIPE_MOCK_IMAGE}" \
-            nomad/dev-job.hcl
+            nomad/job.hcl
 
           echo "Dev deployment submitted."
 
