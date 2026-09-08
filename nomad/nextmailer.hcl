@@ -1,20 +1,8 @@
-# ===============================================================
-# Image Variables
-# ===============================================================
-
-variable "BACKEND_IMAGE" {
-  type = string
-}
-
-variable "BACKEND_UI_IMAGE" {
+variable "IMAGE" {
   type = string
 }
 
 variable "POSTGRES_IMAGE" {
-  type = string
-}
-
-variable "CLOUDFLARE_TUNNEL_TOKEN" {
   type = string
 }
 
@@ -34,19 +22,51 @@ variable "DB_PORT" {
   type = string
 }
 
-# ===============================================================
-# Job
-# ===============================================================
+variable "SECRET_KEY" {
+  type = string
+}
 
-job "redaxify" {
-  namespace   = "dev"
+variable "EMAIL_HOST" {
+  type = string
+}
+
+variable "EMAIL_PORT" {
+  type = string
+}
+
+variable "EMAIL_USE_SSL" {
+  type = string
+}
+
+variable "EMAIL_USE_TLS" {
+  type = string
+}
+
+variable "EMAIL_HOST_USER" {
+  type = string
+}
+
+variable "EMAIL_HOST_PASSWORD" {
+  type = string
+}
+
+variable "MAIL_DEFAULT_SENDER" {
+  type = string
+}
+
+variable "CLOUDFLARE_TUNNEL_TOKEN" {
+  type = string
+}
+
+
+job "nextmailer" {
+  namespace   = "prod"
   datacenters = ["dc1"]
   type        = "service"
 
-
-  # =============================================================
+  # ===============================================================
   # PostgreSQL
-  # =============================================================
+  # ===============================================================
 
   group "database" {
     count = 1
@@ -56,7 +76,7 @@ job "redaxify" {
     }
 
     service {
-      name         = "redaxify-db"
+      name         = "nextmailer-db"
       port         = 5432
       provider     = "nomad"
       address_mode = "alloc"
@@ -65,7 +85,7 @@ job "redaxify" {
         type         = "tcp"
         port         = 5432
         interval     = "10s"
-        timeout      = "5s"
+        timeout      = "3s"
         address_mode = "alloc"
       }
     }
@@ -98,23 +118,23 @@ job "redaxify" {
   }
 
 
-  # =============================================================
-  # Backend
-  # =============================================================
+  # ===============================================================
+  # NextMailer Application
+  # ===============================================================
 
-  group "backend" {
+  group "application" {
     count = 1
 
     network {
       mode = "bridge"
 
       port "http" {
-        to = 4000
+        to = 5000
       }
     }
 
     service {
-      name         = "redaxify-backend"
+      name         = "nextmailer"
       port         = "http"
       provider     = "nomad"
       address_mode = "alloc"
@@ -129,79 +149,33 @@ job "redaxify" {
       }
     }
 
-    task "backend" {
+    task "web" {
       driver = "podman"
 
       config {
-        image = var.BACKEND_IMAGE
+        image = var.IMAGE
       }
 
-      # -----------------------------------------------------------
-      # PostgreSQL connection
-      #
-      # Nomad service discovery dynamically supplies the DB
-      # allocation address and port.
-      # -----------------------------------------------------------
       env {
-        DB_HOST     = "redaxify-backend-ui-db"
+        DB_HOST     = "nextmailer-db"
         DB_PORT     = var.DB_PORT
         DB_NAME     = var.DB_NAME
         DB_USER     = var.DB_USER
         DB_PASSWORD = var.DB_PASSWORD
-      }
 
+        SECRET_KEY = var.SECRET_KEY
 
-      resources {
-        cpu    = 500
-        memory = 512
-      }
+        DEBUG     = "False"
+        FLASK_ENV = "production"
 
-      restart {
-        attempts = 5
-        interval = "30m"
-        delay    = "15s"
-        mode     = "delay"
-      }
-    }
-  }
+        EMAIL_HOST          = var.EMAIL_HOST
+        EMAIL_PORT          = var.EMAIL_PORT
+        EMAIL_USE_SSL       = var.EMAIL_USE_SSL
+        EMAIL_USE_TLS       = var.EMAIL_USE_TLS
+        EMAIL_HOST_USER     = var.EMAIL_HOST_USER
+        EMAIL_HOST_PASSWORD = var.EMAIL_HOST_PASSWORD
 
-
-  # =============================================================
-  # Backend UI
-  # =============================================================
-
-  group "backend-ui" {
-    count = 1
-
-    network {
-      mode = "bridge"
-
-      port "http" {
-        to = 3000
-      }
-    }
-
-    service {
-      name         = "redaxify-backend-ui"
-      port         = "http"
-      provider     = "nomad"
-      address_mode = "alloc"
-
-      check {
-        type         = "http"
-        path         = "/"
-        port         = "http"
-        interval     = "10s"
-        timeout      = "5s"
-        address_mode = "alloc"
-      }
-    }
-
-    task "ui" {
-      driver = "podman"
-
-      config {
-        image = var.BACKEND_UI_IMAGE
+        MAIL_DEFAULT_SENDER = var.MAIL_DEFAULT_SENDER
       }
 
       resources {
@@ -217,6 +191,11 @@ job "redaxify" {
       }
     }
   }
+
+
+  # ===============================================================
+  # Cloudflare Tunnel
+  # ===============================================================
 
   group "cloudflare" {
     count = 1
@@ -246,16 +225,16 @@ job "redaxify" {
         data        = <<EOF
 http:
   routers:
-    redaxify-backend-ui:
+    nextmailer:
       rule: "PathPrefix(`/`)"
       entryPoints:
-        - ui
-      service: redaxify-backend-ui
+        - web
+      service: nextmailer
   services:
-    redaxify-backend-ui:
+    nextmailer:
       loadBalancer:
         servers:
-{{ range nomadService "redaxify-backend-ui" }}
+{{ range nomadService "nextmailer" }}
           - url: "http://{{ .Address }}:{{ .Port }}"
 {{ end }}
 EOF
@@ -296,5 +275,4 @@ EOF
       }
     }
   }
-
 }

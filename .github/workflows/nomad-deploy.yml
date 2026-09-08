@@ -266,8 +266,8 @@ jobs:
         run: |
           nomad job run \
             -namespace="dev" \
-            -var="BACKEND_IMAGE=${BACKEND_COMMIT}" \
-            -var="BACKEND_UI_IMAGE=${BACKEND_UI_COMMIT}" \
+            -var="BACKEND_IMAGE=${BACKEND_LATEST}" \
+            -var="BACKEND_UI_IMAGE=${BACKEND_UI_LATEST}" \
             -var="POSTGRES_IMAGE=${POSTGRES_IMAGE}" \
             nomad/job.hcl
 
