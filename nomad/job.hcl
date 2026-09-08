@@ -1,5 +1,5 @@
 # ===============================================================
-# Image Variables
+# Variables
 # ===============================================================
 
 variable "BACKEND_IMAGE" {
@@ -34,11 +34,13 @@ variable "DB_PORT" {
   type = string
 }
 
+
 # ===============================================================
 # Job
 # ===============================================================
 
 job "redaxify" {
+
   namespace   = "dev"
   datacenters = ["dc1"]
   type        = "service"
@@ -49,33 +51,44 @@ job "redaxify" {
   # =============================================================
 
   group "database" {
+
     count = 1
+
+    shutdown_delay = "10s"
 
     network {
       mode = "bridge"
+
+      port "db" {
+        to = 5432
+      }
     }
+
 
     service {
       name         = "redaxify-db"
-      port         = 5432
+      port         = "db"
       provider     = "nomad"
       address_mode = "alloc"
 
       check {
         type         = "tcp"
-        port         = 5432
+        port         = "db"
         interval     = "10s"
         timeout      = "5s"
         address_mode = "alloc"
       }
     }
 
+
     task "postgres" {
+
       driver = "podman"
 
       config {
         image = var.POSTGRES_IMAGE
       }
+
 
       env {
         POSTGRES_USER     = var.DB_USER
@@ -83,10 +96,12 @@ job "redaxify" {
         POSTGRES_DB       = var.DB_NAME
       }
 
+
       resources {
         cpu    = 500
         memory = 1024
       }
+
 
       restart {
         attempts = 5
@@ -103,7 +118,10 @@ job "redaxify" {
   # =============================================================
 
   group "backend" {
+
     count = 1
+
+    shutdown_delay = "10s"
 
     network {
       mode = "bridge"
@@ -113,15 +131,20 @@ job "redaxify" {
       }
     }
 
+
     service {
       name         = "redaxify-backend"
       port         = "http"
       provider     = "nomad"
       address_mode = "alloc"
 
+      # TCP health check
+      #
+      # This verifies that the backend is actually listening
+      # on port 4000 without depending on the "/" route.
+      #
       check {
-        type         = "http"
-        path         = "/"
+        type         = "tcp"
         port         = "http"
         interval     = "10s"
         timeout      = "5s"
@@ -129,25 +152,46 @@ job "redaxify" {
       }
     }
 
+
     task "backend" {
+
       driver = "podman"
 
       config {
         image = var.BACKEND_IMAGE
       }
 
+
       # -----------------------------------------------------------
-      # PostgreSQL connection
+      # Database connection
+      # -----------------------------------------------------------
       #
-      # Nomad service discovery dynamically supplies the DB
-      # allocation address and port.
-      # -----------------------------------------------------------
+      # nomadService dynamically finds the PostgreSQL service.
+      #
+      # The template is rendered as environment variables.
+      #
+      template {
+        data = <<EOF
+DB_HOST={{ range nomadService "redaxify-db" }}{{ .Address }}{{ end }}
+DB_PORT={{ range nomadService "redaxify-db" }}{{ .Port }}{{ end }}
+DB_NAME={{ env "DB_NAME" }}
+DB_USER={{ env "DB_USER" }}
+DB_PASSWORD={{ env "DB_PASSWORD" }}
+EOF
+
+        destination = "local/backend.env"
+
+        env = true
+      }
+
+
       env {
-        DB_HOST     = "redaxify-backend-ui-db"
-        DB_PORT     = var.DB_PORT
         DB_NAME     = var.DB_NAME
         DB_USER     = var.DB_USER
         DB_PASSWORD = var.DB_PASSWORD
+
+        # PostgreSQL port inside the Nomad service
+        DB_PORT = var.DB_PORT
       }
 
 
@@ -155,6 +199,7 @@ job "redaxify" {
         cpu    = 500
         memory = 512
       }
+
 
       restart {
         attempts = 5
@@ -171,7 +216,10 @@ job "redaxify" {
   # =============================================================
 
   group "backend-ui" {
+
     count = 1
+
+    shutdown_delay = "10s"
 
     network {
       mode = "bridge"
@@ -181,6 +229,7 @@ job "redaxify" {
       }
     }
 
+
     service {
       name         = "redaxify-backend-ui"
       port         = "http"
@@ -188,8 +237,7 @@ job "redaxify" {
       address_mode = "alloc"
 
       check {
-        type         = "http"
-        path         = "/"
+        type         = "tcp"
         port         = "http"
         interval     = "10s"
         timeout      = "5s"
@@ -197,17 +245,21 @@ job "redaxify" {
       }
     }
 
+
     task "ui" {
+
       driver = "podman"
 
       config {
         image = var.BACKEND_UI_IMAGE
       }
 
+
       resources {
         cpu    = 500
         memory = 512
       }
+
 
       restart {
         attempts = 5
@@ -218,57 +270,101 @@ job "redaxify" {
     }
   }
 
+
+  # =============================================================
+  # Traefik + Cloudflare Tunnel
+  # =============================================================
+
   group "cloudflare" {
+
     count = 1
+
+    shutdown_delay = "10s"
 
     network {
       mode = "bridge"
+
+      port "web" {
+        to = 80
+      }
     }
 
-     task "traefik" {
+
+    # ===========================================================
+    # Traefik
+    # ===========================================================
+
+    task "traefik" {
+
       driver = "podman"
 
       config {
         image = "docker.io/library/traefik:v3.1"
+
         args = [
           "--entrypoints.web.address=:80",
           "--providers.file.filename=/local/dynamic.yml",
           "--providers.file.watch=true",
-          "--log.level=INFO",
+          "--log.level=INFO"
         ]
       }
 
-      # Renders the full list of healthy frontend replicas into a
-      # Traefik dynamic config file. Re-renders automatically whenever
-      # instances are added/removed/rescheduled; Traefik's file
-      # provider watch picks up the change live, no restart needed.
+
+      # ---------------------------------------------------------
+      # Dynamic Traefik configuration
+      # ---------------------------------------------------------
+
       template {
-        data        = <<EOF
+        data = <<EOF
 http:
+
   routers:
+
     redaxify-backend-ui:
       rule: "PathPrefix(`/`)"
       entryPoints:
-        - ui
+        - web
       service: redaxify-backend-ui
+
+
   services:
+
     redaxify-backend-ui:
+
       loadBalancer:
+
         servers:
 {{ range nomadService "redaxify-backend-ui" }}
           - url: "http://{{ .Address }}:{{ .Port }}"
 {{ end }}
+
 EOF
+
         destination = "local/dynamic.yml"
       }
+
 
       resources {
         cpu    = 100
         memory = 128
       }
+
+
+      restart {
+        attempts = 10
+        interval = "30m"
+        delay    = "15s"
+        mode     = "delay"
+      }
     }
-    
+
+
+    # ===========================================================
+    # Cloudflare Tunnel
+    # ===========================================================
+
     task "cloudflared" {
+
       driver = "podman"
 
       config {
@@ -283,10 +379,12 @@ EOF
         ]
       }
 
+
       resources {
         cpu    = 100
         memory = 128
       }
+
 
       restart {
         attempts = 10
@@ -296,5 +394,4 @@ EOF
       }
     }
   }
-
 }
