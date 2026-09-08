@@ -188,11 +188,7 @@ jobs:
       - name: Pull PostgreSQL image
         run: |
           podman pull docker.io/library/postgres:15-alpine
-
-          podman tag \
-            docker.io/library/postgres:15-alpine \
-            "$POSTGRES_IMAGE"
-
+          podman tag docker.io/library/postgres:15-alpine "$POSTGRES_IMAGE"
           echo "PostgreSQL image prepared."
 
 
@@ -201,14 +197,8 @@ jobs:
       # ------------------------------------------------------------
       - name: Push backend images
         run: |
-          podman push \
-            --tls-verify=false \
-            "$BACKEND_LATEST"
-
-          podman push \
-            --tls-verify=false \
-            "$BACKEND_COMMIT"
-
+          podman push --tls-verify=false "$BACKEND_LATEST"
+          podman push --tls-verify=false "$BACKEND_COMMIT"
           echo "Backend images pushed."
 
 
@@ -217,14 +207,8 @@ jobs:
       # ------------------------------------------------------------
       - name: Push backend UI images
         run: |
-          podman push \
-            --tls-verify=false \
-            "$BACKEND_UI_LATEST"
-
-          podman push \
-            --tls-verify=false \
-            "$BACKEND_UI_COMMIT"
-
+          podman push --tls-verify=false "$BACKEND_UI_LATEST"
+          podman push --tls-verify=false "$BACKEND_UI_COMMIT"
           echo "Backend UI images pushed."
 
 
@@ -233,10 +217,7 @@ jobs:
       # ------------------------------------------------------------
       - name: Push PostgreSQL image
         run: |
-          podman push \
-            --tls-verify=false \
-            "$POSTGRES_IMAGE"
-
+          podman push --tls-verify=false "$POSTGRES_IMAGE"
           echo "PostgreSQL image pushed."
 
 
@@ -288,7 +269,7 @@ jobs:
             -var="BACKEND_IMAGE=${BACKEND_COMMIT}" \
             -var="BACKEND_UI_IMAGE=${BACKEND_UI_COMMIT}" \
             -var="POSTGRES_IMAGE=${POSTGRES_IMAGE}" \
-            nomad/dev-job.hcl
+            nomad/job.hcl
 
           echo "Dev deployment submitted."
 
